@@ -1,8 +1,38 @@
 import re
+import requests
 from django import forms
 from django.core.validators import MinLengthValidator, EmailValidator
+from django.conf import settings
 from .models import ContactRequest, TrainingReview , TrainingWaitlist, Profile, City
 from django.contrib.auth.models import User
+
+
+def _public_api_base_url():
+    base = getattr(
+        settings,
+        'SITE_MANAGEMENT_PUBLIC_API_BASE',
+        'https://sitemanagement-production.up.railway.app/api/public'
+    )
+    return base.rstrip('/')
+
+
+def get_city_choices():
+    try:
+        response = requests.get(f"{_public_api_base_url()}/cities", timeout=8)
+        response.raise_for_status()
+        payload = response.json()
+        if isinstance(payload, list):
+            choices = [(item.get('id'), item.get('name')) for item in payload if item.get('id') and item.get('name')]
+            if choices:
+                return choices
+    except Exception:
+        pass
+
+    return [
+        ('fallback-casa', 'Casablanca'),
+        ('fallback-rabat', 'Rabat'),
+        ('fallback-tanger', 'Tanger'),
+    ]
 
 class ContactRequestForm(forms.ModelForm):
     """Contact request form with validation"""
@@ -150,17 +180,17 @@ class StudentRegistrationForm(forms.ModelForm):
         widget=forms.EmailInput(attrs={'class': 'form-input', 'placeholder': 'email@exemple.com'})
     )
 
-    city = forms.ModelChoiceField(
-        queryset=City.objects.all(),
+    city = forms.ChoiceField(
+        choices=[],
         label="Ville",
-        widget=forms.Select(attrs={'class': 'auth-input'}),
-        empty_label="Sélectionnez votre ville"
+        widget=forms.Select(attrs={'class': 'auth-input'})
     )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields['cin_or_passport'].required = False
         self.fields['cin_or_passport'].widget.attrs['placeholder'] = 'CIN ou Passeport (Optionnel)'
+        self.fields['city'].choices = [('', 'Sélectionnez votre ville')] + get_city_choices()
 
     def clean_email(self):
         email = self.cleaned_data.get('email')

@@ -283,49 +283,52 @@ class RateLimiter:
         Check if IP has exceeded rate limit
         Returns: (is_allowed, remaining_seconds)
         """
-        one_minute_ago = timezone.now() - timedelta(minutes=period_minutes)
-        
-        # Count requests in the last minute
-        request_count = RateLimitLog.objects.filter(
-            ip_address=ip_address,
-            endpoint=endpoint,
-            last_request__gte=one_minute_ago
-        ).count()
-        
-        # Log the request
-        RateLimitLog.objects.create(
-            ip_address=ip_address,
-            endpoint=endpoint,
-            period_minutes=period_minutes
-        )
-        
-        # Check if limit exceeded
-        if request_count >= limit:
-            # Mark as potential threat
-            threat_ip, created = ThreatIP.objects.get_or_create(
+        try:
+            one_minute_ago = timezone.now() - timedelta(minutes=period_minutes)
+
+            request_count = RateLimitLog.objects.filter(
                 ip_address=ip_address,
-                defaults={
-                    'reason': f'Rate limit exceeded on {endpoint}: {request_count+1} requests in {period_minutes} minute(s)',
-                    'threat_level': 'high',
-                }
+                endpoint=endpoint,
+                last_request__gte=one_minute_ago
+            ).count()
+
+            RateLimitLog.objects.create(
+                ip_address=ip_address,
+                endpoint=endpoint,
+                period_minutes=period_minutes
             )
-            
-            if not created:
-                threat_ip.increment_request_count()
-                threat_ip.reason = f'Rate limit exceeded on {endpoint}: {threat_ip.request_count} total violations'
-                threat_ip.save()
-            
-            return False, 60  # Wait 60 seconds
-        
+
+            if request_count >= limit:
+                threat_ip, created = ThreatIP.objects.get_or_create(
+                    ip_address=ip_address,
+                    defaults={
+                        'reason': f'Rate limit exceeded on {endpoint}: {request_count+1} requests in {period_minutes} minute(s)',
+                        'threat_level': 'high',
+                    }
+                )
+
+                if not created:
+                    threat_ip.increment_request_count()
+                    threat_ip.reason = f'Rate limit exceeded on {endpoint}: {threat_ip.request_count} total violations'
+                    threat_ip.save()
+
+                return False, 60
+        except Exception as exc:
+            logger.warning(f"Rate limiter DB unavailable, allowing request: {exc}")
+
         return True, 0
     
     @staticmethod
     def is_ip_blocked(ip_address):
         """Check if IP is blocked"""
-        return ThreatIP.objects.filter(
-            ip_address=ip_address,
-            is_blocked=True
-        ).exists()
+        try:
+            return ThreatIP.objects.filter(
+                ip_address=ip_address,
+                is_blocked=True
+            ).exists()
+        except Exception as exc:
+            logger.warning(f"ThreatIP DB unavailable, skipping block check: {exc}")
+            return False
 
 # ========== CACHING FUNCTIONS ==========
 
@@ -643,23 +646,23 @@ def home(request):
     
     if featured_trainings is None:
         try:
-            featured_trainings = Training.objects.filter(
+            featured_trainings = list(Training.objects.filter(
                 is_active=True,
                 is_featured=True
             ).only(
                 'id', 'title', 'slug', 'short_description', 'price_mad',
                 'duration_days', 'success_rate', 'max_students', 'badge',
                 'thumbnail'
-            ).order_by('-created_at')[:4]
+            ).order_by('-created_at')[:4])
 
             if not featured_trainings:
-                featured_trainings = Training.objects.filter(
+                featured_trainings = list(Training.objects.filter(
                     is_active=True
                 ).only(
                     'id', 'title', 'slug', 'short_description', 'price_mad',
                     'duration_days', 'success_rate', 'max_students', 'badge',
                     'thumbnail'
-                ).order_by('-created_at')[:4]
+                ).order_by('-created_at')[:4])
             cache.set('featured_trainings', featured_trainings, 1800)  # 30 minutes
         except Exception as exc:
             logger.warning(f"Home DB trainings unavailable, using API fallback: {exc}")
@@ -714,13 +717,13 @@ def training_catalog(request):
     
     using_api_fallback = False
     try:
-        trainings = Training.objects.filter(is_active=True).only(
+        trainings = list(Training.objects.filter(is_active=True).only(
             'id', 'title', 'slug', 'short_description', 'price_mad',
             'duration_days', 'success_rate', 'max_students', 'badge',
             'thumbnail', 'next_session', 'is_featured',
             'category_caces', 'category_electricite', 'category_soudage',
             'category_securite', 'category_management', 'category_autre'
-        ).order_by('-created_at')
+        ).order_by('-created_at'))
     except Exception as exc:
         logger.warning(f"Catalog DB trainings unavailable, using API fallback: {exc}")
         using_api_fallback = True
@@ -758,11 +761,11 @@ def training_catalog(request):
                 trainings = [t for t in trainings if getattr(t, flag, False)]
             else:
                 filter_kwargs = {category_map[category_filter]: True}
-                trainings = trainings.filter(**filter_kwargs)
+                trainings = [t for t in trainings if getattr(t, category_map[category_filter], False)]
     
     # Get categories from cache
     categories = get_cached_categories(trainings)
-    total_count = len(trainings) if using_api_fallback else trainings.count()
+    total_count = len(trainings)
     
     # Get preferred currency
     preferred_currency = request.session.get('preferred_currency', 'MAD')
@@ -942,7 +945,7 @@ def migration_services(request):
         }, status=429)
     
     try:
-        cities = City.objects.filter(is_active=True).order_by('name')
+        cities = list(City.objects.filter(is_active=True).order_by('name'))
     except Exception as exc:
         logger.warning(f"Migration services cities DB unavailable, using API fallback: {exc}")
         cities = fetch_public_cities()
@@ -971,7 +974,7 @@ def contact_centers(request):
         }, status=429)
     
     try:
-        cities = City.objects.filter(is_active=True).order_by('name')
+        cities = list(City.objects.filter(is_active=True).order_by('name'))
     except Exception as exc:
         logger.warning(f"Contact centers cities DB unavailable, using API fallback: {exc}")
         cities = fetch_public_cities()
@@ -1483,7 +1486,12 @@ def register(request):
                 profile.full_name = form.cleaned_data['full_name']
                 profile.cin_or_passport = form.cleaned_data['cin_or_passport']
                 profile.phone_number = form.cleaned_data['phone_number']
-                profile.city = form.cleaned_data['city']
+                city_id = form.cleaned_data.get('city')
+                if city_id and not str(city_id).startswith('fallback-'):
+                    try:
+                        profile.city = City.objects.get(id=city_id)
+                    except Exception as city_exc:
+                        logger.warning(f"Could not assign city from DB during registration: {city_exc}")
                 profile.save()
             except Exception as e:
                 logger.error(f"Error updating profile: {e}")
@@ -1641,8 +1649,11 @@ def student_profile(request):
         
         # Fix: Get or create City object instead of assigning string
         if city_name:
-            city_obj, created = City.objects.get_or_create(name=city_name)
-            profile.city = city_obj
+            try:
+                city_obj, created = City.objects.get_or_create(name=city_name)
+                profile.city = city_obj
+            except Exception as city_exc:
+                logger.warning(f"City table unavailable while updating profile city: {city_exc}")
         
         profile.save()
         
