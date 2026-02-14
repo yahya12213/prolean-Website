@@ -91,49 +91,52 @@ class RateLimiter:
         Check if IP has exceeded rate limit
         Returns: (is_allowed, remaining_seconds)
         """
-        one_minute_ago = timezone.now() - timedelta(minutes=period_minutes)
-        
-        # Count requests in the last minute
-        request_count = RateLimitLog.objects.filter(
-            ip_address=ip_address,
-            endpoint=endpoint,
-            last_request__gte=one_minute_ago
-        ).count()
-        
-        # Log the request
-        RateLimitLog.objects.create(
-            ip_address=ip_address,
-            endpoint=endpoint,
-            period_minutes=period_minutes
-        )
-        
-        # Check if limit exceeded
-        if request_count >= limit:
-            # Mark as potential threat
-            threat_ip, created = ThreatIP.objects.get_or_create(
+        try:
+            one_minute_ago = timezone.now() - timedelta(minutes=period_minutes)
+
+            request_count = RateLimitLog.objects.filter(
                 ip_address=ip_address,
-                defaults={
-                    'reason': f'Rate limit exceeded on {endpoint}: {request_count+1} requests in {period_minutes} minute(s)',
-                    'threat_level': 'high',
-                }
+                endpoint=endpoint,
+                last_request__gte=one_minute_ago
+            ).count()
+
+            RateLimitLog.objects.create(
+                ip_address=ip_address,
+                endpoint=endpoint,
+                period_minutes=period_minutes
             )
-            
-            if not created:
-                threat_ip.increment_request_count()
-                threat_ip.reason = f'Rate limit exceeded on {endpoint}: {threat_ip.request_count} total violations'
-                threat_ip.save()
-            
-            return False, 60  # Wait 60 seconds
-        
+
+            if request_count >= limit:
+                threat_ip, created = ThreatIP.objects.get_or_create(
+                    ip_address=ip_address,
+                    defaults={
+                        'reason': f'Rate limit exceeded on {endpoint}: {request_count+1} requests in {period_minutes} minute(s)',
+                        'threat_level': 'high',
+                    }
+                )
+
+                if not created:
+                    threat_ip.increment_request_count()
+                    threat_ip.reason = f'Rate limit exceeded on {endpoint}: {threat_ip.request_count} total violations'
+                    threat_ip.save()
+
+                return False, 60
+        except Exception as exc:
+            logger.warning(f"Rate limiter DB unavailable, allowing request: {exc}")
+
         return True, 0
     
     @staticmethod
     def is_ip_blocked(ip_address):
         """Check if IP is blocked"""
-        return ThreatIP.objects.filter(
-            ip_address=ip_address,
-            is_blocked=True
-        ).exists()
+        try:
+            return ThreatIP.objects.filter(
+                ip_address=ip_address,
+                is_blocked=True
+            ).exists()
+        except Exception as exc:
+            logger.warning(f"ThreatIP DB unavailable, skipping block check: {exc}")
+            return False
 
 
 

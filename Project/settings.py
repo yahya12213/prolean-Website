@@ -52,7 +52,10 @@ MIDDLEWARE = [
 
     
 ]
-SESSION_ENGINE = 'django.contrib.sessions.backends.db'
+SESSION_ENGINE = os.environ.get(
+    'SESSION_ENGINE',
+    'django.contrib.sessions.backends.signed_cookies'
+)
 SESSION_COOKIE_AGE = 86400  # 24 hours in seconds
 ROOT_URLCONF = 'Project.urls'
 import os
@@ -105,7 +108,10 @@ CACHES = {
 }
 
 # Session Configuration
-SESSION_ENGINE = 'django.contrib.sessions.backends.db'
+SESSION_ENGINE = os.environ.get(
+    'SESSION_ENGINE',
+    'django.contrib.sessions.backends.signed_cookies'
+)
 SESSION_COOKIE_AGE = 1209600  # 2 weeks in seconds
 SESSION_COOKIE_SECURE = False  # Set to True in production with HTTPS
 SESSION_COOKIE_HTTPONLY = True
