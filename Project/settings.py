@@ -213,3 +213,9 @@ SITE_MANAGEMENT_PUBLIC_API_BASE = os.environ.get(
     'SITE_MANAGEMENT_PUBLIC_API_BASE',
     'https://sitemanagement-production.up.railway.app/api/public'
 )
+
+# Full management API base for public registration and auth handoff.
+SITE_MANAGEMENT_API_BASE = os.environ.get(
+    'SITE_MANAGEMENT_API_BASE',
+    'https://sitemanagement-production.up.railway.app/api'
+)

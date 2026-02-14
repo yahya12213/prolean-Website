@@ -1476,44 +1476,45 @@ from django.contrib.auth.forms import AuthenticationForm
 from django.contrib import messages
 
 def register(request):
-    """Handle student registration"""
+    """Handle student registration via management API (no local DB dependency)."""
     if request.method == 'POST':
         form = StudentRegistrationForm(request.POST)
         if form.is_valid():
-            user = User.objects.create_user(
-                username=form.cleaned_data['cin_or_passport'],
-                email=form.cleaned_data['email'],
-                password=form.cleaned_data['password'],
-                first_name=form.cleaned_data['full_name'].split(' ')[0],
-                last_name=' '.join(form.cleaned_data['full_name'].split(' ')[1:])
-            )
-            
-            # Profile is created by signal, but we update it here
             try:
-                profile = user.profile
-                profile.role = 'STUDENT'
-                profile.full_name = form.cleaned_data['full_name']
-                profile.cin_or_passport = form.cleaned_data['cin_or_passport']
-                profile.phone_number = form.cleaned_data['phone_number']
-                city_id = form.cleaned_data.get('city')
-                if city_id and not str(city_id).startswith('fallback-'):
-                    try:
-                        profile.city = City.objects.get(id=city_id)
-                    except Exception as city_exc:
-                        logger.warning(f"Could not assign city from DB during registration: {city_exc}")
-                profile.save()
-            except Exception as e:
-                logger.error(f"Error updating profile: {e}")
-            
-            # Authenticate and login (optional, or redirect to login)
-            login(request, user)
-            messages.success(request, "Compte créé avec succès! En attente de validation.")
-            return redirect('Prolean:home')
+                api_base = getattr(
+                    settings,
+                    'SITE_MANAGEMENT_API_BASE',
+                    'https://sitemanagement-production.up.railway.app/api'
+                ).rstrip('/')
+                payload = {
+                    'full_name': form.cleaned_data.get('full_name'),
+                    'email': form.cleaned_data.get('email'),
+                    'password': form.cleaned_data.get('password'),
+                    'cin_or_passport': form.cleaned_data.get('cin_or_passport'),
+                    'phone_number': form.cleaned_data.get('phone_number'),
+                    'city_id': form.cleaned_data.get('city'),
+                }
+                response = requests.post(
+                    f"{api_base}/public/student-register",
+                    json=payload,
+                    timeout=15
+                )
+                if response.status_code in (200, 201):
+                    messages.success(request, "Compte cree avec succes. Vous pouvez maintenant vous connecter.")
+                    return redirect('Prolean:login')
+                try:
+                    data = response.json()
+                    error_message = data.get('error') or data.get('message') or "Erreur lors de l'inscription."
+                except Exception:
+                    error_message = "Erreur lors de l'inscription."
+                form.add_error(None, error_message)
+            except Exception as exc:
+                logger.error(f"Registration API call failed: {exc}")
+                form.add_error(None, "Service d'inscription indisponible. Reessayez plus tard.")
     else:
         form = StudentRegistrationForm()
-    
-    return render(request, 'registration/signup.html', {'form': form})
 
+    return render(request, 'registration/signup.html', {'form': form})
 def login_view(request):
     """Custom login view"""
     if request.method == 'POST':

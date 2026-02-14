@@ -3,8 +3,7 @@ import requests
 from django import forms
 from django.core.validators import MinLengthValidator, EmailValidator
 from django.conf import settings
-from .models import ContactRequest, TrainingReview , TrainingWaitlist, Profile, City
-from django.contrib.auth.models import User
+from .models import ContactRequest, TrainingReview , TrainingWaitlist
 
 
 def _public_api_base_url():
@@ -151,78 +150,64 @@ class MigrationInquiryForm(forms.Form):
     profession = forms.CharField(max_length=100)
     message = forms.CharField(widget=forms.Textarea, required=False)
 
-class StudentRegistrationForm(forms.ModelForm):
-    """Public registration form for students"""
-    password = forms.CharField(
-        label="Mot de passe",
-        widget=forms.PasswordInput(attrs={
-            'class': 'form-input', 'placeholder': 'Mot de passe'
-        })
+class StudentRegistrationForm(forms.Form):
+    """Public registration form for students through management API."""
+    full_name = forms.CharField(
+        max_length=255,
+        label="Nom complet",
+        widget=forms.TextInput(attrs={'class': 'form-input', 'placeholder': 'Nom complet'})
     )
-    confirm_password = forms.CharField(
-        label="Confirmer le mot de passe",
-        widget=forms.PasswordInput(attrs={
-            'class': 'form-input', 'placeholder': 'Confirmer le mot de passe'
-        })
+    cin_or_passport = forms.CharField(
+        max_length=20,
+        required=False,
+        label="CIN ou Passeport",
+        widget=forms.TextInput(attrs={'class': 'form-input', 'placeholder': 'CIN ou Passeport (Optionnel)'})
     )
-    
-    class Meta:
-        model = Profile
-        fields = ['full_name', 'cin_or_passport', 'phone_number', 'city']
-        widgets = {
-            'full_name': forms.TextInput(attrs={'class': 'form-input', 'placeholder': 'Nom complet'}),
-            'cin_or_passport': forms.TextInput(attrs={'class': 'form-input', 'placeholder': 'CIN ou Passeport'}),
-            'phone_number': forms.TextInput(attrs={'class': 'form-input', 'placeholder': 'Téléphone'}),
-        }
-    
+    phone_number = forms.CharField(
+        max_length=20,
+        label="Telephone",
+        widget=forms.TextInput(attrs={'class': 'form-input', 'placeholder': 'Telephone'})
+    )
     email = forms.EmailField(
         label="Email",
         widget=forms.EmailInput(attrs={'class': 'form-input', 'placeholder': 'email@exemple.com'})
     )
-
     city = forms.ChoiceField(
         choices=[],
         label="Ville",
         widget=forms.Select(attrs={'class': 'auth-input'})
     )
+    password = forms.CharField(
+        label="Mot de passe",
+        widget=forms.PasswordInput(attrs={'class': 'form-input', 'placeholder': 'Mot de passe'})
+    )
+    confirm_password = forms.CharField(
+        label="Confirmer le mot de passe",
+        widget=forms.PasswordInput(attrs={'class': 'form-input', 'placeholder': 'Confirmer le mot de passe'})
+    )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields['cin_or_passport'].required = False
-        self.fields['cin_or_passport'].widget.attrs['placeholder'] = 'CIN ou Passeport (Optionnel)'
-        self.fields['city'].choices = [('', 'Sélectionnez votre ville')] + get_city_choices()
+        self.fields['city'].choices = [('', 'Selectionnez votre ville')] + get_city_choices()
 
     def clean_email(self):
-        email = self.cleaned_data.get('email')
-        if User.objects.filter(email=email).exists():
-            raise forms.ValidationError("Cet email est déjà utilisé.")
-        return email
+        return self.cleaned_data.get('email')
 
     def clean_phone_number(self):
-        phone = self.cleaned_data.get('phone_number')
-        if phone and Profile.objects.filter(phone_number=phone).exists():
-            raise forms.ValidationError("Ce numéro de téléphone est déjà utilisé.")
-        return phone
+        return self.cleaned_data.get('phone_number')
 
     def clean_cin_or_passport(self):
         cin = self.cleaned_data.get('cin_or_passport')
         if cin:
             cin = cin.strip().upper()
-            # 🧠 Rule: 1 or 2 letters followed by exactly 6 digits
             cin_regex = r'^[A-Z]{1,2}[0-9]{6}$'
             if not re.match(cin_regex, cin):
                 raise forms.ValidationError("Format CIN invalide. Utilisez 1 ou 2 lettres suivies de 6 chiffres (ex: AB123456).")
-            
-            if Profile.objects.filter(cin_or_passport=cin).exists():
-                raise forms.ValidationError("Ce numéro CIN ou Passeport est déjà utilisé.")
         return cin
-
 
     def clean(self):
         cleaned_data = super().clean()
-        password = cleaned_data.get("password")
-        confirm_password = cleaned_data.get("confirm_password")
-
-        if password != confirm_password:
+        if cleaned_data.get("password") != cleaned_data.get("confirm_password"):
             raise forms.ValidationError("Les mots de passe ne correspondent pas.")
         return cleaned_data
+
