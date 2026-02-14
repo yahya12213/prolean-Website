@@ -253,6 +253,8 @@ import json
 import requests
 from datetime import datetime, timedelta
 import logging
+from types import SimpleNamespace
+from django.conf import settings
 from django.db.models import Avg, Count, Sum
 from .models import (
     Training, City, ContactRequest, CurrencyRate,
@@ -323,6 +325,179 @@ class RateLimiter:
         ).exists()
 
 # ========== CACHING FUNCTIONS ==========
+
+def _public_api_base_url():
+    base = getattr(
+        settings,
+        'SITE_MANAGEMENT_PUBLIC_API_BASE',
+        'https://sitemanagement-production.up.railway.app/api/public'
+    )
+    return base.rstrip('/')
+
+
+class APITrainingAdapter:
+    """Adapter to expose API training payload with template-compatible attributes."""
+
+    def __init__(self, payload):
+        title = payload.get('title') or ''
+        self.id = payload.get('id')
+        self.slug = payload.get('slug') or str(self.id) or ''
+        self.title = title
+        self.short_description = payload.get('short_description') or (payload.get('description') or '')[:180]
+        self.description = payload.get('description') or ''
+        self.price_mad = payload.get('price_mad') or 0
+        self.duration_days = max(1, int((payload.get('duration_hours') or 8) / 8))
+        self.success_rate = payload.get('success_rate') or 95
+        self.max_students = payload.get('max_students') or 20
+        self.badge = payload.get('badge') or ''
+        self.thumbnail = payload.get('thumbnail') or payload.get('image') or payload.get('image_url') or ''
+        self.next_session = payload.get('next_session')
+        self.is_featured = bool(payload.get('is_featured'))
+
+        lower_title = title.lower()
+        self.category_caces = 'caces' in lower_title
+        self.category_electricite = ('electri' in lower_title) or ('électri' in lower_title)
+        self.category_soudage = 'soudage' in lower_title
+        self.category_securite = ('securite' in lower_title) or ('sécurit' in lower_title)
+        self.category_management = 'management' in lower_title
+        self.category_autre = not any([
+            self.category_caces,
+            self.category_electricite,
+            self.category_soudage,
+            self.category_securite,
+            self.category_management
+        ])
+
+        self.available_casablanca = True
+        self.available_rabat = True
+        self.available_tanger = True
+        self.available_marrakech = True
+        self.available_agadir = True
+        self.available_fes = True
+        self.available_meknes = True
+        self.available_oujda = True
+        self.available_laayoune = True
+        self.available_dakhla = True
+        self.available_other = False
+
+    def increment_view_count(self):
+        return None
+
+    def get_price_in_currency(self, currency_code):
+        rates = {
+            'MAD': 1.0,
+            'EUR': 0.093,
+            'USD': 0.100,
+            'GBP': 0.079,
+            'CAD': 0.136,
+            'AED': 0.367,
+        }
+        return float(self.price_mad or 0) * float(rates.get(currency_code, 1.0))
+
+    def get_gallery_images(self):
+        return []
+
+    def get_certificates(self):
+        return []
+
+    def get_testimonials(self):
+        return []
+
+    def get_faqs(self):
+        return []
+
+    def get_features(self):
+        return []
+
+    def get_categories(self):
+        values = []
+        if self.category_caces:
+            values.append('caces')
+        if self.category_electricite:
+            values.append('electricite')
+        if self.category_soudage:
+            values.append('soudage')
+        if self.category_securite:
+            values.append('securite')
+        if self.category_management:
+            values.append('management')
+        if self.category_autre:
+            values.append('autre')
+        return values
+
+
+def fetch_public_formations():
+    try:
+        response = requests.get(f"{_public_api_base_url()}/formations", timeout=8)
+        response.raise_for_status()
+        data = response.json()
+        if isinstance(data, list):
+            return [APITrainingAdapter(item) for item in data]
+    except Exception as exc:
+        logger.warning(f"Public formations API fallback failed: {exc}")
+    return [
+        APITrainingAdapter({
+            'id': 'fallback-caces-r489',
+            'slug': 'caces-r489',
+            'title': 'CACES R489 - Chariots',
+            'description': 'Formation certifiante à la conduite en sécurité des chariots élévateurs.',
+            'price_mad': 4500,
+            'duration_hours': 40,
+            'is_featured': True,
+        }),
+        APITrainingAdapter({
+            'id': 'fallback-r486-pemp',
+            'slug': 'caces-r486-pemp',
+            'title': 'CACES R486 - PEMP',
+            'description': 'Formation nacelles PEMP avec préparation théorique et pratique.',
+            'price_mad': 5200,
+            'duration_hours': 40,
+            'is_featured': True,
+        }),
+        APITrainingAdapter({
+            'id': 'fallback-securite',
+            'slug': 'formation-securite',
+            'title': 'Formation Sécurité',
+            'description': 'Programme sécurité pour milieux industriels et chantiers.',
+            'price_mad': 3800,
+            'duration_hours': 24,
+            'is_featured': False,
+        }),
+    ]
+
+
+def fetch_public_formation_by_slug(slug):
+    try:
+        response = requests.get(f"{_public_api_base_url()}/formations/{slug}", timeout=8)
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        payload = response.json()
+        if isinstance(payload, dict):
+            payload['slug'] = slug
+            return APITrainingAdapter(payload)
+    except Exception as exc:
+        logger.warning(f"Public formation detail API fallback failed: {exc}")
+    for formation in fetch_public_formations():
+        if formation.slug == slug:
+            return formation
+    return None
+
+
+def fetch_public_cities():
+    try:
+        response = requests.get(f"{_public_api_base_url()}/cities", timeout=8)
+        response.raise_for_status()
+        data = response.json()
+        if isinstance(data, list):
+            return [SimpleNamespace(**item) for item in data]
+    except Exception as exc:
+        logger.warning(f"Public cities API fallback failed: {exc}")
+    return [
+        SimpleNamespace(id='fallback-casa', name='Casablanca', code='CASA', segment_id=''),
+        SimpleNamespace(id='fallback-rabat', name='Rabat', code='RAB', segment_id=''),
+        SimpleNamespace(id='fallback-tanger', name='Tanger', code='TNG', segment_id=''),
+    ]
 
 def get_cached_featured_trainings():
     """Get featured trainings from cache or database"""
@@ -464,26 +639,28 @@ def home(request):
     featured_trainings = cache.get('featured_trainings')
     
     if featured_trainings is None:
-        featured_trainings = Training.objects.filter(
-            is_active=True,
-            is_featured=True
-        ).only(
-            'id', 'title', 'slug', 'short_description', 'price_mad',
-            'duration_days', 'success_rate', 'max_students', 'badge',
-            'thumbnail'
-        ).order_by('-created_at')[:4]
-        
-        # If no featured trainings, get recent active ones
-        if not featured_trainings:
+        try:
             featured_trainings = Training.objects.filter(
-                is_active=True
+                is_active=True,
+                is_featured=True
             ).only(
                 'id', 'title', 'slug', 'short_description', 'price_mad',
                 'duration_days', 'success_rate', 'max_students', 'badge',
                 'thumbnail'
             ).order_by('-created_at')[:4]
-        
-        cache.set('featured_trainings', featured_trainings, 1800)  # 30 minutes
+
+            if not featured_trainings:
+                featured_trainings = Training.objects.filter(
+                    is_active=True
+                ).only(
+                    'id', 'title', 'slug', 'short_description', 'price_mad',
+                    'duration_days', 'success_rate', 'max_students', 'badge',
+                    'thumbnail'
+                ).order_by('-created_at')[:4]
+            cache.set('featured_trainings', featured_trainings, 1800)  # 30 minutes
+        except Exception as exc:
+            logger.warning(f"Home DB trainings unavailable, using API fallback: {exc}")
+            featured_trainings = fetch_public_formations()[:4]
     
     # Get user location
     ip_address = get_client_ip(request)
@@ -532,22 +709,34 @@ def training_catalog(request):
             'wait_time': wait_time
         }, status=429)
     
-    # Get all active trainings with optimized query
-    trainings = Training.objects.filter(is_active=True).only(
-        'id', 'title', 'slug', 'short_description', 'price_mad',
-        'duration_days', 'success_rate', 'max_students', 'badge',
-        'thumbnail', 'next_session', 'is_featured',
-        'category_caces', 'category_electricite', 'category_soudage',
-        'category_securite', 'category_management', 'category_autre'
-    ).order_by('-created_at')
+    using_api_fallback = False
+    try:
+        trainings = Training.objects.filter(is_active=True).only(
+            'id', 'title', 'slug', 'short_description', 'price_mad',
+            'duration_days', 'success_rate', 'max_students', 'badge',
+            'thumbnail', 'next_session', 'is_featured',
+            'category_caces', 'category_electricite', 'category_soudage',
+            'category_securite', 'category_management', 'category_autre'
+        ).order_by('-created_at')
+    except Exception as exc:
+        logger.warning(f"Catalog DB trainings unavailable, using API fallback: {exc}")
+        using_api_fallback = True
+        trainings = fetch_public_formations()
     
     # Get search query
     search_query = request.GET.get('q', '')
     if search_query:
-        trainings = trainings.filter(
-            Q(title__icontains=search_query) |
-            Q(short_description__icontains=search_query)
-        )
+        if using_api_fallback:
+            needle = search_query.lower()
+            trainings = [
+                t for t in trainings
+                if needle in (t.title or '').lower() or needle in (t.short_description or '').lower()
+            ]
+        else:
+            trainings = trainings.filter(
+                Q(title__icontains=search_query) |
+                Q(short_description__icontains=search_query)
+            )
     
     # Get category filter
     category_filter = request.GET.get('category', 'all')
@@ -561,12 +750,16 @@ def training_catalog(request):
             'autre': 'category_autre',
         }
         if category_filter in category_map:
-            filter_kwargs = {category_map[category_filter]: True}
-            trainings = trainings.filter(**filter_kwargs)
+            if using_api_fallback:
+                flag = category_map[category_filter]
+                trainings = [t for t in trainings if getattr(t, flag, False)]
+            else:
+                filter_kwargs = {category_map[category_filter]: True}
+                trainings = trainings.filter(**filter_kwargs)
     
     # Get categories from cache
     categories = get_cached_categories(trainings)
-    total_count = trainings.count()
+    total_count = len(trainings) if using_api_fallback else trainings.count()
     
     # Get preferred currency
     preferred_currency = request.session.get('preferred_currency', 'MAD')
@@ -604,18 +797,27 @@ def training_catalog(request):
 # Update the training_detail function in views.py
 def training_detail(request, slug):
     """Training detail view with reviews and optimized queries"""
-    training = get_object_or_404(
-        Training.objects.select_related(None),
-        slug=slug,
-        is_active=True
-    )
+    try:
+        training = get_object_or_404(
+            Training.objects.select_related(None),
+            slug=slug,
+            is_active=True
+        )
+    except Exception as exc:
+        logger.warning(f"Training detail DB unavailable, using API fallback: {exc}")
+        training = fetch_public_formation_by_slug(slug)
+        if training is None:
+            return redirect('Prolean:training_catalog')
     
     # Increment view count
     training.increment_view_count()
     track_page_view(request, f"{training.title} - Prolean Centre")
     
     # Get active bank account
-    active_bank_account = CompanyBankAccount.get_active_account()
+    try:
+        active_bank_account = CompanyBankAccount.get_active_account()
+    except Exception:
+        active_bank_account = None
     
     # Check rate limit
     ip_address = get_client_ip(request)
@@ -655,10 +857,13 @@ def training_detail(request, slug):
             available_cities.append({'name': name})
     
     # Get reviews
-    reviews = TrainingReview.objects.filter(
-        training=training,
-        is_approved=True
-    ).order_by('-created_at')
+    try:
+        reviews = TrainingReview.objects.filter(
+            training=training,
+            is_approved=True
+        ).order_by('-created_at')
+    except Exception:
+        reviews = []
     
     # Add avatar path to each review (compatible with old and new reviews)
     for review in reviews:
@@ -674,10 +879,16 @@ def training_detail(request, slug):
             else:
                 review.avatar = f'images/avatars/avatar1.png'
     
-    avg_rating = get_training_avg_rating(training.id)
+    try:
+        avg_rating = get_training_avg_rating(training.id)
+    except Exception:
+        avg_rating = 0
     
     # Get waitlist count
-    waitlist_count = TrainingWaitlist.objects.filter(training=training).count()
+    try:
+        waitlist_count = TrainingWaitlist.objects.filter(training=training).count()
+    except Exception:
+        waitlist_count = 0
     
     # Get gallery images, certificates, testimonials, FAQs, and features
     gallery_images = training.get_gallery_images()
@@ -691,7 +902,7 @@ def training_detail(request, slug):
         'training': training,
         'available_cities': available_cities,
         'reviews': reviews,
-        'review_count': reviews.count(),
+        'review_count': reviews.count() if hasattr(reviews, 'count') else len(reviews),
         'waitlist_count': waitlist_count,
         'preferred_currency': preferred_currency,
         'gallery_images': gallery_images,
@@ -727,7 +938,11 @@ def migration_services(request):
             'wait_time': wait_time
         }, status=429)
     
-    cities = City.objects.filter(is_active=True).order_by('name')
+    try:
+        cities = City.objects.filter(is_active=True).order_by('name')
+    except Exception as exc:
+        logger.warning(f"Migration services cities DB unavailable, using API fallback: {exc}")
+        cities = fetch_public_cities()
     ip_address = get_client_ip(request)
     user_location = get_location_from_ip(ip_address)
     
@@ -752,7 +967,11 @@ def contact_centers(request):
             'wait_time': wait_time
         }, status=429)
     
-    cities = City.objects.filter(is_active=True).order_by('name')
+    try:
+        cities = City.objects.filter(is_active=True).order_by('name')
+    except Exception as exc:
+        logger.warning(f"Contact centers cities DB unavailable, using API fallback: {exc}")
+        cities = fetch_public_cities()
     ip_address = get_client_ip(request)
     user_location = get_location_from_ip(ip_address)
     

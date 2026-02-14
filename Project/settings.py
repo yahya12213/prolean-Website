@@ -195,3 +195,10 @@ EMAIL_SUBJECT_PREFIX = '[Prolean] '
 LOGIN_REDIRECT_URL = 'Prolean:dashboard'
 LOGOUT_REDIRECT_URL = 'home'
 LOGIN_URL = 'login'
+
+# Public API fallback for trainings/cities when local DB tables are unavailable.
+# Example: https://sitemanagement-production.up.railway.app/api/public
+SITE_MANAGEMENT_PUBLIC_API_BASE = os.environ.get(
+    'SITE_MANAGEMENT_PUBLIC_API_BASE',
+    'https://sitemanagement-production.up.railway.app/api/public'
+)
