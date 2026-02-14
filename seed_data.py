@@ -1,5 +1,6 @@
 import django
 import os
+import random
 
 # ------------------
 # Django setup
@@ -7,19 +8,12 @@ import os
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "Project.settings")
 django.setup()
 
-from Prolean.models import (
-    TrainingCategory,
-    Training,
-    TrainingObjective,
-    TrainingCertificate,
-    TrainingLicence,
-    City,
-)
+from Prolean.models import Training, City
 
 # ------------------
 # CITIES (30 Moroccan)
 # ------------------
-cities = [
+cities_list = [
     "Agadir", "Al Hoceïma", "Berkane", "Béni Mellal", "Casablanca", "Dakhla",
     "El Jadida", "Errachidia", "Essaouira", "Fès", "Ifrane", "Khenifra",
     "Khouribga", "Kénitra", "Laâyoune", "Marrakech", "Meknès", "Nador",
@@ -28,93 +22,87 @@ cities = [
 ]
 
 print("Creating cities...")
-city_objs = []
-for name in cities:
-    city, _ = City.objects.update_or_create(name=name)
-    city_objs.append(city)
-print("Cities created.")
-
-# ------------------
-# TRAINING CATEGORIES
-# ------------------
-categories_data = [
-    ("CACES", "caces"),
-    ("Électricien Bâtiment", "electricien-batiment"),
-    ("Qualité", "qualite"),
-    ("Soudage", "soudage"),
-]
-
-print("Creating categories...")
-category_objs = {}
-for title, slug in categories_data:
-    cat, _ = TrainingCategory.objects.update_or_create(
-        slug=slug,
-        defaults={"name": title}
-    )
-    category_objs[title] = cat
-print("Categories created.")
+# City model might not exist if it was removed in favor of choices, 
+# but views.py imports it. If it doesn't exist, we skip.
+try:
+    for name in cities_list:
+        City.objects.get_or_create(name=name, defaults={"is_active": True})
+    print("Cities created.")
+except Exception as e:
+    print(f"Skipping City creation (might not exist as model): {e}")
 
 # ------------------
 # CACES TRAININGS
 # ------------------
 caces_trainings = [
-    ("CACES R485 – Chariots Élévateurs Télescopiques", 1900),
-    ("CACES R489 – Chariots Élévateurs", 2400),
-    ("CACES R482 – Engins de Chantier", 2500),
-    ("CACES R490 – Grues de Chargement", 2800),
-    ("CACES R483 – Grues Mobiles", 3200),
-    ("CACES R487 – Grues à Tour", 4200),
-    ("CACES R486 – PEMP (Nacelles)", 2300),
-    ("CACES R484 – Ponts Roulants", 2700),
+    ("CACES R485 – Chariots Élévateurs Télescopiques", 1900, "caces"),
+    ("CACES R489 – Chariots Élévateurs", 2400, "caces"),
+    ("CACES R482 – Engins de Chantier", 2500, "caces"),
+    ("CACES R490 – Grues de Chargement", 2800, "caces"),
+    ("Habilitation Électrique B1/B2", 1500, "electricite"),
+    ("Soudage TIG/MIG", 3000, "soudage"),
+    ("Management d'équipe", 4000, "management"),
 ]
 
-print("Creating CACES trainings...")
+print("Creating trainings...")
 
-for title, price in caces_trainings:
-    slug = title.lower().replace(" ", "-").replace("–", "-")
+for title, price, category in caces_trainings:
+    slug = title.lower().replace(" ", "-").replace("–", "-").replace("é", "e").replace("/", "-")
+    
+    # Determine category boolean fields
+    cat_caces = category == "caces"
+    cat_elec = category == "electricite"
+    cat_soud = category == "soudage"
+    cat_mgmt = category == "management"
+    
+    defaults = {
+        "title": title,
+        "short_description": f"Formation professionnelle certifiante : {title}",
+        "detailed_description": f"Une formation complète pour maîtriser {title}. Programme incluant théorie et pratique.",
+        "objectives": "Maîtriser les règles de sécurité\nObtenir la certification officielle\nAméliorer l'employabilité",
+        "price_mad": price,
+        "duration_days": 5,
+        "badge": "promo" if price < 2500 else "popular",
+        "is_active": True,
+        "is_featured": True,
+        "thumbnail": "https://via.placeholder.com/600x400",
+        
+        # Categories
+        "category_caces": cat_caces,
+        "category_electricite": cat_elec,
+        "category_soudage": cat_soud,
+        "category_management": cat_mgmt,
+        "category_securite": True, # Always include security
 
-    training, created = Training.objects.update_or_create(
-        slug=slug,
-        defaults={
-            "title": title,
-            "category": category_objs["CACES"],
-            "description": f"Formation professionnelle certifiante : {title}",
-            "thumbnail_url": "https://via.placeholder.com/600x400",
-            "price_mad": price,
-            "badge": "promo" if price < 2500 else "",
-            "is_active": True,
-        }
-    )
+        # Certificates
+        "certificate_name_1": "Certificat Professionnel",
+        "certificate_image_1": "https://via.placeholder.com/400x300",
+        
+        # License
+        "license_recto_url": "https://via.placeholder.com/400x250",
+        "license_verso_url": "https://via.placeholder.com/400x250",
 
-    # assign all cities
-    training.cities.set(city_objs)
-
-    # objectives
-    TrainingObjective.objects.get_or_create(
-        training=training,
-        text="Maîtriser les règles de sécurité"
-    )
-
-    TrainingObjective.objects.get_or_create(
-        training=training,
-        text="Obtenir la certification officielle"
-    )
-
-    # certificate
-    TrainingCertificate.objects.get_or_create(
-        training=training,
-        name="Certificat CACES",
-        image_url="https://via.placeholder.com/400x300"
-    )
-
-    # licence recto / verso
-    TrainingLicence.objects.update_or_create(
-    training=training,
-    defaults={
-        "recto_image_url": "https://via.placeholder.com/400x250",
-        "verso_image_url": "https://via.placeholder.com/400x250",
+        # Cities availability
+        "available_casablanca": True,
+        "available_rabat": True,
+        "available_tanger": True,
+        "available_marrakech": True,
     }
-)
 
-print("CACES trainings created.")
+    try:
+        training, created = Training.objects.update_or_create(
+            slug=slug,
+            defaults=defaults
+        )
+        print(f"{'Created' if created else 'Updated'}: {title}")
+    except Exception as e:
+        # Fallback if slug exists but with different uniqueness constrains or other errors
+        # Try with a random suffix
+        slug = f"{slug}-{random.randint(1000, 9999)}"
+        try:
+             Training.objects.create(slug=slug, **defaults)
+             print(f"Created with new slug: {title}")
+        except Exception as e2:
+             print(f"Failed to create {title}: {e2}")
+
 print("Seeding complete ✅")
