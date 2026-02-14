@@ -24,7 +24,7 @@ from .models import (
     RecordedVideo, LiveRecording, AttendanceLog, VideoProgress, Question,
     TrainingPreSubscription, Notification, Live, Seance
 )
-from .forms import ContactRequestForm, TrainingReviewForm, WaitlistForm, TrainingInquiryForm, MigrationInquiryForm, StudentRegistrationForm
+from .forms import ContactRequestForm, TrainingReviewForm, WaitlistForm, TrainingInquiryForm, MigrationInquiryForm, StudentRegistrationForm, StudentLoginForm
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import User
@@ -1472,7 +1472,6 @@ def mark_review_helpful(request):
 # AUTHENTICATION VIEWS
 # ==========================================
 
-from django.contrib.auth.forms import AuthenticationForm
 from django.contrib import messages
 
 def register(request):
@@ -1515,26 +1514,53 @@ def register(request):
         form = StudentRegistrationForm()
 
     return render(request, 'registration/signup.html', {'form': form})
+
+
+def _management_api_base():
+    return getattr(
+        settings,
+        'SITE_MANAGEMENT_API_BASE',
+        'https://sitemanagement-production.up.railway.app/api'
+    ).rstrip('/')
+
+
+def _clear_external_student_session(request):
+    request.session.pop('external_student_token', None)
+    request.session.pop('external_student_profile', None)
+
+
 def login_view(request):
-    """Custom login view"""
+    """External student login view using Site Management API."""
     if request.method == 'POST':
-        form = AuthenticationForm(request, data=request.POST)
+        form = StudentLoginForm(request.POST)
         if form.is_valid():
-            username = form.cleaned_data.get('username')
-            password = form.cleaned_data.get('password')
-            user = authenticate(username=username, password=password)
-            if user is not None:
-                login(request, user)
-                return redirect('Prolean:home')
-            else:
-                messages.error(request, "Identifiants invalides.")
-        else:
-             messages.error(request, "Identifiants invalides.")
-    
-    form = AuthenticationForm()
+            try:
+                response = requests.post(
+                    f"{_management_api_base()}/public/student-login",
+                    json={
+                        'email': form.cleaned_data.get('email'),
+                        'password': form.cleaned_data.get('password'),
+                    },
+                    timeout=15
+                )
+                payload = response.json() if response.content else {}
+                if response.status_code == 200 and payload.get('token'):
+                    request.session['external_student_token'] = payload.get('token')
+                    request.session['external_student_profile'] = payload.get('student', {})
+                    messages.success(request, "Connexion reussie.")
+                    return redirect('Prolean:dashboard')
+                form.add_error(None, payload.get('error') or "Identifiants invalides.")
+            except Exception as exc:
+                logger.error(f"External student login failed: {exc}")
+                form.add_error(None, "Service de connexion indisponible. Reessayez plus tard.")
+    else:
+        form = StudentLoginForm()
+
     return render(request, 'registration/login.html', {'form': form})
 
+
 def logout_view(request):
+    _clear_external_student_session(request)
     logout(request)
     return redirect('Prolean:home')
 
@@ -1544,7 +1570,35 @@ def logout_view(request):
 
 def dashboard(request):
     """Student dashboard view - Enhanced with stats and schedule"""
-    # 🧠 Behavior to Implement: Simulate logged-in experience
+    external_token = request.session.get('external_student_token')
+    if external_token:
+        try:
+            response = requests.get(
+                f"{_management_api_base()}/public/student/dashboard",
+                headers={'Authorization': f'Bearer {external_token}'},
+                timeout=20
+            )
+            if response.status_code == 401:
+                _clear_external_student_session(request)
+                messages.error(request, "Session expiree. Veuillez vous reconnecter.")
+                return redirect('Prolean:login')
+            payload = response.json() if response.content else {}
+            if response.status_code == 200:
+                return render(request, 'Prolean/dashboard/api_dashboard.html', {
+                    'api_mode': True,
+                    'profile': payload.get('profile', {}),
+                    'account_status': payload.get('account_status', 'active'),
+                    'stats': payload.get('stats', {}),
+                    'my_formations': payload.get('formations', []),
+                    'sessions': payload.get('sessions', []),
+                })
+            messages.error(request, payload.get('error') or "Impossible de charger votre espace.")
+            return redirect('Prolean:login')
+        except Exception as exc:
+            logger.error(f"Failed to load external student dashboard: {exc}")
+            messages.error(request, "Service indisponible. Reessayez plus tard.")
+            return redirect('Prolean:login')
+
     if not request.user.is_authenticated:
         return render(request, 'Prolean/dashboard/restricted_access.html')
     if not hasattr(request.user, 'profile'):

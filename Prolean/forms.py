@@ -211,3 +211,14 @@ class StudentRegistrationForm(forms.Form):
             raise forms.ValidationError("Les mots de passe ne correspondent pas.")
         return cleaned_data
 
+
+class StudentLoginForm(forms.Form):
+    email = forms.EmailField(
+        label="Email",
+        widget=forms.EmailInput(attrs={'class': 'auth-input', 'placeholder': 'email@exemple.com'})
+    )
+    password = forms.CharField(
+        label="Mot de passe",
+        widget=forms.PasswordInput(attrs={'class': 'auth-input', 'placeholder': 'Mot de passe'})
+    )
+

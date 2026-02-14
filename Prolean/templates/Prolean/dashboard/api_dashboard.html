@@ -1,0 +1,49 @@
+{% extends 'Prolean/base.html' %}
+{% load static %}
+
+{% block title %}Mon Espace - Prolean{% endblock %}
+
+{% block content %}
+<section class="py-16 bg-[#f8fafc] dark:bg-[#0b1220] min-h-screen">
+  <div class="max-w-6xl mx-auto px-6">
+    <div class="mb-8">
+      <h1 class="text-3xl font-black text-slate-900 dark:text-white">Mon espace etudiant</h1>
+      <p class="text-slate-600 dark:text-slate-300 mt-2">
+        Bienvenue {{ profile.full_name|default:'Etudiant' }}.
+      </p>
+      <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">
+        Statut du compte: <span class="font-bold">{{ account_status }}</span>
+      </p>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-10">
+      <div class="rounded-2xl bg-white dark:bg-slate-900 p-6 border border-slate-200 dark:border-slate-700">
+        <p class="text-sm text-slate-500 dark:text-slate-400">Formations assignees</p>
+        <p class="text-3xl font-black text-slate-900 dark:text-white">{{ stats.formations_count|default:0 }}</p>
+      </div>
+      <div class="rounded-2xl bg-white dark:bg-slate-900 p-6 border border-slate-200 dark:border-slate-700">
+        <p class="text-sm text-slate-500 dark:text-slate-400">Sessions actives</p>
+        <p class="text-3xl font-black text-slate-900 dark:text-white">{{ stats.sessions_count|default:0 }}</p>
+      </div>
+    </div>
+
+    <div class="rounded-2xl bg-white dark:bg-slate-900 p-6 border border-slate-200 dark:border-slate-700">
+      <h2 class="text-xl font-bold text-slate-900 dark:text-white mb-4">Mes formations</h2>
+      {% if my_formations %}
+        <ul class="space-y-3">
+          {% for formation in my_formations %}
+            <li class="p-4 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+              <p class="font-semibold text-slate-900 dark:text-white">{{ formation.title }}</p>
+              {% if formation.session_id %}
+                <p class="text-xs text-slate-500 dark:text-slate-400">Session ID: {{ formation.session_id }}</p>
+              {% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="text-slate-500 dark:text-slate-400">Aucune formation assignee pour le moment.</p>
+      {% endif %}
+    </div>
+  </div>
+</section>
+{% endblock %}
