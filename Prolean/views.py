@@ -440,36 +440,8 @@ def fetch_public_formations():
         if isinstance(data, list):
             return [APITrainingAdapter(item) for item in data]
     except Exception as exc:
-        logger.warning(f"Public formations API fallback failed: {exc}")
-    return [
-        APITrainingAdapter({
-            'id': 'fallback-caces-r489',
-            'slug': 'caces-r489',
-            'title': 'CACES R489 - Chariots',
-            'description': 'Formation certifiante à la conduite en sécurité des chariots élévateurs.',
-            'price_mad': 4500,
-            'duration_hours': 40,
-            'is_featured': True,
-        }),
-        APITrainingAdapter({
-            'id': 'fallback-r486-pemp',
-            'slug': 'caces-r486-pemp',
-            'title': 'CACES R486 - PEMP',
-            'description': 'Formation nacelles PEMP avec préparation théorique et pratique.',
-            'price_mad': 5200,
-            'duration_hours': 40,
-            'is_featured': True,
-        }),
-        APITrainingAdapter({
-            'id': 'fallback-securite',
-            'slug': 'formation-securite',
-            'title': 'Formation Sécurité',
-            'description': 'Programme sécurité pour milieux industriels et chantiers.',
-            'price_mad': 3800,
-            'duration_hours': 24,
-            'is_featured': False,
-        }),
-    ]
+        logger.warning(f"Public formations API unavailable: {exc}")
+    return []
 
 
 def fetch_public_formation_by_slug(slug):
@@ -498,12 +470,8 @@ def fetch_public_cities():
         if isinstance(data, list):
             return [SimpleNamespace(**item) for item in data]
     except Exception as exc:
-        logger.warning(f"Public cities API fallback failed: {exc}")
-    return [
-        SimpleNamespace(id='fallback-casa', name='Casablanca', code='CASA', segment_id=''),
-        SimpleNamespace(id='fallback-rabat', name='Rabat', code='RAB', segment_id=''),
-        SimpleNamespace(id='fallback-tanger', name='Tanger', code='TNG', segment_id=''),
-    ]
+        logger.warning(f"Public cities API unavailable: {exc}")
+    return []
 
 def get_cached_featured_trainings():
     """Get featured trainings from cache or database"""
@@ -1003,165 +971,120 @@ def contact_centers(request):
 @require_POST
 @csrf_exempt
 def submit_contact_request(request):
-    """Handle contact form submission with rate limiting"""
+    """Forward contact request to Site Management API (single source of truth)."""
     try:
-        # Check rate limit
         ip_address = get_client_ip(request)
         allowed, wait_time = RateLimiter.check_rate_limit(ip_address, 'submit_contact', limit=5)
-        
+        if not allowed:
+            return JsonResponse({
+                'success': False,
+                'message': f'Trop de demandes. R\u00e9essayez dans {wait_time} secondes.'
+            }, status=429)
+
         data = json.loads(request.body)
-        
-        # Get user location
-        user_location = get_location_from_ip(ip_address)
-        
-        # Determine request type
-        request_type = data.get('request_type', 'information')
-        
-        # Create contact request
-        contact_data = {
+        payload = {
             'full_name': data.get('full_name', '').strip(),
-            'email': data.get('email', '').strip().lower(),
-            'phone': data.get('phone', '').strip(),
-            'city': data.get('city', user_location.get('city', '')),
-            'country': data.get('country', user_location.get('country', 'Maroc')),
-            'request_type': request_type,
+            'email': data.get('email', '').strip().lower() or None,
+            'phone': data.get('phone', '').strip() or None,
+            'city_id': data.get('city_id') or data.get('city') or None,
             'message': data.get('message', '').strip(),
+            'request_type': data.get('request_type', 'information'),
             'training_title': data.get('training_title', ''),
-            'payment_method': data.get('payment_method', ''),
-            'ip_address': ip_address,
-            'user_agent': request.META.get('HTTP_USER_AGENT', ''),
-            'session_id': request.session.session_key or '',
+            'source': 'prolean_public_site',
         }
-        
-        # Add payment details if present
-        if data.get('payment_method'):
-            contact_data['payment_status'] = 'pending' if data['payment_method'] == 'bank_transfer' else 'completed'
-            contact_data['card_last_four'] = data.get('card_last_four', '')
-            contact_data['card_expiry'] = data.get('card_expiry', '')
-            contact_data['transfer_reference'] = data.get('transfer_reference', '')
-        
-        # Create contact request
-        contact_request = ContactRequest.objects.create(**contact_data)
-        
-        # If training specified, increment inquiry count
-        training_id = data.get('training_id')
-        if training_id:
-            try:
-                training = Training.objects.get(id=training_id)
-                training.increment_inquiry_count()
-                contact_request.training = training
-                contact_request.save()
-            except Training.DoesNotExist:
-                pass
-        
-        # Track form submission
-        if request.session.session_key:
-            FormSubmission.objects.create(
-                form_type='contact',
-                training_title=data.get('training_title', ''),
-                session_id=request.session.session_key,
-                ip_address=ip_address,
-                city=user_location.get('city', ''),
-                country=user_location.get('country', ''),
-                time_spent=data.get('time_spent', 0)
-            )
-        
+
+        api_base = getattr(
+            settings,
+            'SITE_MANAGEMENT_API_BASE',
+            'https://sitemanagement-production.up.railway.app/api'
+        ).rstrip('/')
+        response = requests.post(
+            f"{api_base}/public/contact-requests",
+            json=payload,
+            timeout=15
+        )
+
+        body = response.json() if response.content else {}
+        if response.status_code not in (200, 201):
+            return JsonResponse({
+                'success': False,
+                'message': body.get('error') or body.get('message') or 'Erreur lors de l\'envoi de la demande.'
+            }, status=response.status_code)
+
         return JsonResponse({
             'success': True,
-            'message': 'Votre demande a été envoyée avec succès.',
-            'request_id': contact_request.id
+            'message': 'Votre demande a \u00e9t\u00e9 envoy\u00e9e avec succ\u00e8s.',
+            'request_id': body.get('id')
         })
-        
     except Exception as e:
-        logger.error(f"Error submitting contact request: {e}")
+        logger.error(f"Error submitting contact request via management API: {e}")
         return JsonResponse({
             'success': False,
-            'message': f'Une erreur est survenue: {str(e)}'
-        }, status=500)
+            'message': 'Service temporairement indisponible.'
+        }, status=503)
 
 
 @csrf_exempt
 @require_POST
 def create_pre_subscription(request):
-    """Create a pre-subscription with bank transfer support"""
+    """Forward pre-inscription to Site Management API."""
     try:
         data = json.loads(request.body)
-        
-        # Validate required fields
-        required_fields = ['training_id', 'full_name', 'email', 'phone', 'city', 'payment_method']
+
+        required_fields = ['training_id', 'full_name', 'email', 'phone']
         for field in required_fields:
             if not data.get(field):
                 return JsonResponse({
                     'success': False,
                     'message': f'Le champ {field} est obligatoire'
-                })
-        
-        # Get training
-        try:
-            training = Training.objects.get(id=data['training_id'])
-        except Training.DoesNotExist:
+                }, status=400)
+
+        payload = {
+            'formation_id': data.get('training_id'),
+            'full_name': data.get('full_name', '').strip(),
+            'email': data.get('email', '').strip().lower(),
+            'phone': data.get('phone', '').strip(),
+            'city_id': data.get('city_id') or data.get('city') or None,
+            'message': data.get('message') or '',
+            'payment_method': data.get('payment_method'),
+            'currency_used': data.get('currency_used', 'MAD'),
+            'source': 'prolean_public_site',
+        }
+
+        api_base = getattr(
+            settings,
+            'SITE_MANAGEMENT_API_BASE',
+            'https://sitemanagement-production.up.railway.app/api'
+        ).rstrip('/')
+        response = requests.post(
+            f"{api_base}/public/pre-inscriptions",
+            json=payload,
+            timeout=15
+        )
+
+        body = response.json() if response.content else {}
+        if response.status_code not in (200, 201):
             return JsonResponse({
                 'success': False,
-                'message': 'Formation non trouvée'
-            })
-        
-        # Create subscription data
-        subscription_data = {
-            'training': training,
-            'full_name': data['full_name'],
-            'email': data['email'],
-            'phone': data['phone'],
-            'city': data['city'],
-            'payment_method': data['payment_method'],
-            'original_price_mad': data.get('original_price_mad', training.price_mad),
-            'paid_price_mad': data.get('paid_price_mad', training.price_mad),
-            'currency_used': data.get('currency_used', 'MAD'),
-            'payment_status': 'pending' if data['payment_method'] == 'bank_transfer' else 'completed',
-            'ip_address': get_client_ip(request),
-            'user_agent': request.META.get('HTTP_USER_AGENT', ''),
-            'session_id': request.session.session_key or str(uuid.uuid4())
-        }
-        
-        # Add card details if applicable
-        if data['payment_method'] == 'card':
-            subscription_data['card_last_four'] = data.get('card_last_four', '')[-4:] if data.get('card_last_four') else ''
-            subscription_data['card_expiry'] = data.get('card_expiry', '')
-        
-        # Add bank transfer details if applicable
-        if data['payment_method'] == 'bank_transfer':
-            subscription_data['transfer_confirmation'] = data.get('transfer_confirmation', '')
-            subscription_data['transfer_reference'] = f"TRF-{str(uuid.uuid4())[:8].upper()}"
-        
-        # Create subscription
-        subscription = TrainingPreSubscription.objects.create(**subscription_data)
-        
-        # Generate PDF receipt
-        receipt_url = subscription.generate_receipt_pdf()
-        
+                'message': body.get('error') or body.get('message') or 'Erreur lors de la pre-inscription.'
+            }, status=response.status_code)
+
         return JsonResponse({
             'success': True,
-            'message': 'Inscription créée avec succès' if data['payment_method'] != 'bank_transfer' 
-                      else 'Pré-inscription enregistrée. Veuillez effectuer le virement.',
+            'message': 'Pre-inscription enregistree avec succes.',
             'subscription': {
-                'id': subscription.id,
-                'transaction_id': str(subscription.transaction_id),
-                'full_name': subscription.full_name,
-                'paid_price': str(subscription.paid_price_mad),
-                'currency_used': subscription.currency_used,
-                'receipt_url': receipt_url or '',
-                'payment_method': subscription.payment_method,
-                'payment_status': subscription.payment_status,
-                'transfer_reference': subscription.transfer_reference if data['payment_method'] == 'bank_transfer' else None
+                'id': body.get('id'),
+                'transaction_id': body.get('id'),
+                'payment_method': data.get('payment_method'),
+                'payment_status': 'pending'
             }
         })
-        
     except Exception as e:
-        logger.error(f"Error creating pre-subscription: {str(e)}")
+        logger.error(f"Error creating pre-subscription via management API: {str(e)}")
         return JsonResponse({
             'success': False,
-            'message': f'Erreur: {str(e)}'
-        })
-
+            'message': 'Service temporairement indisponible.'
+        }, status=503)
 
 
 @csrf_exempt
@@ -2715,3 +2638,7 @@ from datetime import timedelta
 def director_dashboard(request):
     """Redirect to Django Admin as per user request"""
     return redirect('/admin/')
+
+
+
+

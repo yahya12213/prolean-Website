@@ -28,7 +28,7 @@ ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '*').split(',')
 
 CSRF_TRUSTED_ORIGINS = os.environ.get(
     'CSRF_TRUSTED_ORIGINS',
-    'https://natural-fascination-production.up.railway.app,https://*.railway.app'
+    'https://natural-fascination-production.up.railway.app,https://*.up.railway.app,https://*.railway.app'
 ).split(',')
 
 
