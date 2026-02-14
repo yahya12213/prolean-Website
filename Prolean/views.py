@@ -663,6 +663,8 @@ def home(request):
                     'duration_days', 'success_rate', 'max_students', 'badge',
                     'thumbnail'
                 ).order_by('-created_at')[:4])
+            if not featured_trainings:
+                featured_trainings = fetch_public_formations()[:4]
             cache.set('featured_trainings', featured_trainings, 1800)  # 30 minutes
         except Exception as exc:
             logger.warning(f"Home DB trainings unavailable, using API fallback: {exc}")
@@ -724,6 +726,9 @@ def training_catalog(request):
             'category_caces', 'category_electricite', 'category_soudage',
             'category_securite', 'category_management', 'category_autre'
         ).order_by('-created_at'))
+        if not trainings:
+            using_api_fallback = True
+            trainings = fetch_public_formations()
     except Exception as exc:
         logger.warning(f"Catalog DB trainings unavailable, using API fallback: {exc}")
         using_api_fallback = True
@@ -946,6 +951,8 @@ def migration_services(request):
     
     try:
         cities = list(City.objects.filter(is_active=True).order_by('name'))
+        if not cities:
+            cities = fetch_public_cities()
     except Exception as exc:
         logger.warning(f"Migration services cities DB unavailable, using API fallback: {exc}")
         cities = fetch_public_cities()
@@ -975,6 +982,8 @@ def contact_centers(request):
     
     try:
         cities = list(City.objects.filter(is_active=True).order_by('name'))
+        if not cities:
+            cities = fetch_public_cities()
     except Exception as exc:
         logger.warning(f"Contact centers cities DB unavailable, using API fallback: {exc}")
         cities = fetch_public_cities()
